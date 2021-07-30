@@ -3,51 +3,61 @@ const postcss = require('postcss');
 const hasha = require('hasha');
 const globby = require('globby');
 
-const jsdom = require('./lib/jsdom.js');
+const cheerio = require('cheerio');
 
 const COMPEXITY = /[\s>]/;
 
 module.exports = postcss.plugin('postcss-simplify-selectors', function (opts) {
-  var jsdomPromise = globby(opts.html)
-  .then(res => {
-    if (!res) throw new Error('Must pass a valid list of HTML files');
-    opts.html = res;
-    return jsdom(opts.html);
-  });
 
-  return function (root, result) {
+
+  opts.wrapHTML = opts.wrapHTML || false;
+
+  const getFiles = async() => {
+    const response = await globby(opts.html);
+    
+    if (!response) throw new Error('Must pass a valid list of HTML files');
+
+    opts.html = response;
+
+    const files = await Promise.all(opts.html.map(path => fs.promises.readFile(path)));
+
+    return files.map(file => cheerio.load(file, null, opts.wrapHTML));
+  }
+
+  return (root, result) => {
     // Get an array of rules:
-    var rules = []
+    const rules = []
     root.walkRules(rule => rules.push(rule))
+    
 
-    return jsdomPromise.then(documents => {
-      rules.forEach(function (rule) {
+    return getFiles().then(documents => {
+      rules.forEach((rule) => {
         // Seperate selectors by commas, map, and join:
         rule.selector = postcss.list.comma(rule.selector).map(selector => {
           // Test complexity:
           if (!COMPEXITY.test(selector)) return selector;
           // Returns hash or selector
-          return checkHTML(selector, documents);
+          return checkHTML(selector, documents, opts.wrapHTML);
         })
         .join(',');
       });
       // Replace HTML:
-      return documents.map((doc, i) => fs.writeFile(opts.html[i], jsdom.serialize(doc)));
+      return documents.map((doc, i) => fs.writeFile(opts.html[i], doc.html()));
     });
   };
 });
 
 function checkHTML(selector, documents) {
-  var hash;
+  let hash;
   documents.forEach(doc => {
     // Query selector:
-    var elems = doc.defaultView.document.querySelectorAll(selector);
+    const elems = doc(selector);
+    //Check if any elements match query selector
     if (elems.length) {
       if (!hash) hash = hasha(selector).substr(0, 5);
-      for (var i = 0; i < elems.length; i++) {
-        elems[i].classList.add('_' + hash);
-      }
+  
+      elems.addClass(`_${hash}`);
     }
   })
-  return hash ? '._' + hash : selector;
+  return hash ? `._${hash} `: selector;
 }
